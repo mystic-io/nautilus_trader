@@ -576,7 +576,7 @@ The following test modules drive real localhost sockets and are cfg-gated out un
 - `crates/network/src/socket/client.rs::rust_tests`
 - `crates/network/src/websocket/client.rs::tests`
 - `crates/network/src/websocket/client.rs::rust_tests`
-- `crates/network/tests/websocket_proxy.rs`
+- `crates/network/tests/integration/websocket_proxy.rs`
 
 Their production paths reach madsim time primitives through `dst::time::*`, which panic when called
 from a `#[tokio::test]` runtime.
@@ -659,10 +659,10 @@ identical observable behavior across complete runs.
 
 The dedicated workflow and local pre-flight use the same DST targets:
 
-| Entry point                 | Relevant order                                                               | Purpose                                                                   |
-| --------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `.github/workflows/dst.yml` | `check-code-sim` > `cargo-test-sim`                                          | Runs the nightly and manually dispatched DST smoke gate.                  |
-| `make pre-flight`           | `check-code-sim` > `cargo-test-doc` > `cargo-test-sim` > `cargo-test-extras` | Fails early on DST lint while keeping doctests ahead of nextest binaries. |
+| Entry point                 | Relevant order                                            | Purpose                                                  |
+| --------------------------- | --------------------------------------------------------- | -------------------------------------------------------- |
+| `.github/workflows/dst.yml` | `check-code-sim` > `cargo-test-sim`                       | Runs the nightly and manually dispatched DST smoke gate. |
+| `make pre-flight`           | `check-code-sim` > `cargo-test-sim` > `cargo-test-extras` | Fails early on DST lint before the Rust test suites.     |
 
 `check-code-sim` runs pinned stable Clippy with `--features simulation` and `cfg(madsim)` across
 `nautilus-common`, `nautilus-core`, `nautilus-event-store`, `nautilus-network`,

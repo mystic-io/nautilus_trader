@@ -43,6 +43,8 @@ imports and configuration to the new module paths:
 | `nautilus_trader.backtest.engine.BacktestEngine`               | `nautilus_trader.backtest.BacktestEngine`                 |
 | `nautilus_trader.backtest.node.BacktestNode`                   | `nautilus_trader.backtest.BacktestNode`                   |
 | `nautilus_trader.live.node.TradingNode`                        | `nautilus_trader.live.LiveNode`                           |
+| `nautilus_trader.model.enums.OrderSide`                        | `nautilus_trader.model.OrderSide`                         |
+| `nautilus_trader.model.identifiers.TraderId`                   | `nautilus_trader.model.TraderId`                          |
 | `nautilus_trader.config.StrategyConfig`                        | `nautilus_trader.config.StrategyConfig`                   |
 | Adapter classes from `nautilus_trader.adapters.<venue>.config` | Rust/PyO3 classes from `nautilus_trader.adapters.<venue>` |
 
@@ -249,24 +251,19 @@ precision and increment, and timestamps instead.
 
 Several v1 inspection names have direct v2 replacements:
 
-| v1 name                                              | v2 name                         |
-| ---------------------------------------------------- | ------------------------------- |
-| `instrument.activation_utc`                          | `instrument.activation_ns`      |
-| `instrument.expiration_utc`                          | `instrument.expiration_ns`      |
-| `instrument.tick_scheme_name`                        | `instrument.tick_scheme`        |
-| `AdaptiveMovingAverage.period` or `.period_er`       | `.period_efficiency_ratio`      |
-| `AdaptiveMovingAverage.period_alpha_fast`            | `.period_fast`                  |
-| `AdaptiveMovingAverage.period_alpha_slow`            | `.period_slow`                  |
-| `LinearRegression.R2`                                | `LinearRegression.r2`           |
-| `DirectionalMovement.value`                          | `.pos` and `.neg`               |
-| `DataType.type`                                      | `DataType.type_name`            |
-| `OrderBookDelta.is_add/is_clear/is_delete/is_update` | inspect `OrderBookDelta.action` |
-| `OrderBookDeltas.is_snapshot`                        | inspect `OrderBookDeltas.flags` |
-| `Bar.is_revision`                                    | removed                         |
+| v1 name                                        | v2 name                    |
+| ---------------------------------------------- | -------------------------- |
+| `instrument.tick_scheme_name`                  | `instrument.tick_scheme`   |
+| `AdaptiveMovingAverage.period` or `.period_er` | `.period_efficiency_ratio` |
+| `AdaptiveMovingAverage.period_alpha_fast`      | `.period_fast`             |
+| `AdaptiveMovingAverage.period_alpha_slow`      | `.period_slow`             |
+| `LinearRegression.R2`                          | `LinearRegression.r2`      |
+| `DirectionalMovement.value`                    | `.pos` and `.neg`          |
+| `DataType.type`                                | `DataType.type_name`       |
+| `Bar.is_revision`                              | removed                    |
 
-`activation_ns` and `expiration_ns` contain UNIX nanoseconds; convert them to the datetime type
-used by the application when calendar-time inspection is needed. V1 `DirectionalMovement.value`
-never changed from zero, so v2 exposes the meaningful positive and negative outputs instead.
+V1 `DirectionalMovement.value` never changed from zero, so v2 exposes the meaningful positive and
+negative outputs instead.
 
 `MarginAccount.margin()`, `MarginAccount.margins()`, and `MarginAccount.account_margins()` keep
 their v1 names. Other read-only margin queries move the measure or scope qualifier to the front in
@@ -437,10 +434,13 @@ Interactive Brokers execution factories now use no-argument constructors. Custom
 factories must accept `TraderId` in their `ExecutionClientFactory::create` or
 `SimulatedExecutionClientFactory::create` implementation.
 
-The v1 fill, fee, latency, and simulation-module config and factory wrappers are also removed.
-Construct the current model or module directly, such as `ProbabilisticFillModel`,
-`FixedFeeModel`, `StaticLatencyModel`, or `FXRolloverInterestModule`, and pass it to the backtest
-venue. `SimulationModuleConfig` is therefore no longer a separate Python type.
+The v1 fill, fee, latency, margin, and simulation-module config and factory wrappers are also
+removed. This includes `Importable*ModelConfig`, `MarginModelConfig`, and their factories, which
+loaded Python or Cython classes by import path. Construct the current model or module directly,
+such as `ProbabilisticFillModel`, `FixedFeeModel`, `StaticLatencyModel`, `StandardMarginModel`,
+`LeveragedMarginModel`, or `FXRolloverInterestModule`, and pass it to the backtest venue.
+`SimulationModuleConfig` is therefore no longer a separate Python type. Native Rust models are
+composed at compile time; v1 did not provide runtime native model plugins.
 
 `DataCatalogConfig` and `StreamingConfig` have v2-native Python equivalents for `BacktestNode`.
 Configure existing built-in-data catalog queries and Feather output through `BacktestEngineConfig`.
@@ -497,7 +497,9 @@ class MyStrategy(Strategy):
         pass
 ```
 
-Annotated custom fields on a v1 `StrategyConfig` subclass do not carry over. In v2, declare them as
+V1 config classes use msgspec `Struct`, while v2 config classes are Rust/PyO3 types. Imports and
+subclass constructors written for one version do not work unchanged with the other. Annotated
+custom fields on a v1 `StrategyConfig` subclass do not carry over. In v2, declare them as
 keyword-only arguments on `__init__`, accept `**_kwargs` so the base keywords pass through, and call
 `super().__init__()` with no arguments. The PyO3 base reads its own fields in `__new__` from the same
 call and ignores the ones it does not recognize, so no `__new__` override is needed. Do not reuse a
@@ -747,6 +749,11 @@ Account for these differences from v1:
   sides raises `TypeError`. Sort on `level.price` when code needs side-independent price order.
 - V2 `OrderBook` pickle data is not interchangeable with v1 pickle data. Rebuild snapshots from
   source market data when moving between the implementations.
+- `OrderBookDeltas.is_snapshot` tests `F_SNAPSHOT` on the batch flags, which come from the final
+  delta. The old implementation tested whether the first delta had a `CLEAR` action, so a clear
+  without the flag is not a snapshot.
+- Instrument `activation_utc` and `expiration_utc` properties return UTC-aware `datetime.datetime`
+  values. Use `activation_ns` and `expiration_ns` when exact nanosecond precision is required.
 - v2 caches `OptionGreeks` for option fee calculation; this extends v1.
 - `Bar.is_revision` is not exposed on the v2 Python surface. Do not depend on it during migration.
 - A direct `Position.apply` fill that crosses zero resets the open entry price to the flipping fill.
@@ -798,6 +805,78 @@ ALTER TYPE AGGRESSOR_SIDE RENAME VALUE 'SELLER' TO 'SELL';
 ```
 
 Do not run those statements if the enum already contains `BUY` and `SELL`.
+
+## Compare backtest performance
+
+Use `scripts/benchmark-backtest-versions.py` for a wall-clock comparison between the released v1
+Cython engine and the v2 PyO3 engine. The driver owns one shared scenario matrix and normalizes the
+small API differences at runtime. It rejects a run before timing unless both environments use the
+expected package version, backend, source revision, Python version, and precision mode. For v2, it
+also requires the requested source revision to be embedded in the loaded extension.
+
+Run the comparison on a quiet host. These commands create isolated release environments and a
+detached v1 worktree without changing the current branch:
+
+```bash
+COMPARE_ROOT=$(mktemp -d /tmp/nautilus-backtest-compare.XXXXXX)
+git worktree add --detach "$COMPARE_ROOT/v1" v1.231.0
+
+uv venv --python /usr/bin/python3.12 "$COMPARE_ROOT/env-v1"
+(
+    cd "$COMPARE_ROOT/v1"
+    uvx --from uv==0.11.33 uv build --wheel --python /usr/bin/python3.12 \
+        --out-dir "$COMPARE_ROOT/wheels-v1"
+)
+V1_WHEEL=$(find "$COMPARE_ROOT/wheels-v1" -type f -name 'nautilus_trader-*.whl')
+UV_LINK_MODE=copy uv pip install --no-cache \
+    --python "$COMPARE_ROOT/env-v1/bin/python" "$V1_WHEEL"
+
+uv venv --python /usr/bin/python3.12 "$COMPARE_ROOT/env-v2"
+uv pip install --python "$COMPARE_ROOT/env-v2/bin/python" maturin==1.14.1 patchelf
+(
+    cd python
+    CARGO_BUILD_JOBS=16 "$COMPARE_ROOT/env-v2/bin/maturin" build --release \
+        --out "$COMPARE_ROOT/wheels-v2"
+)
+V2_WHEEL=$(find "$COMPARE_ROOT/wheels-v2" -type f -name 'nautilus_trader-*.whl')
+UV_LINK_MODE=copy uv pip install --no-cache \
+    --python "$COMPARE_ROOT/env-v2/bin/python" "$V2_WHEEL"
+
+V1_COMMIT=$(git -C "$COMPARE_ROOT/v1" rev-parse HEAD)
+V2_COMMIT=$(git rev-parse HEAD)
+python3.12 scripts/benchmark-backtest-versions.py compare \
+    --v1-python "$COMPARE_ROOT/env-v1/bin/python" \
+    --v1-artifact "$V1_WHEEL" \
+    --v1-source "$COMPARE_ROOT/v1" \
+    --v1-commit "$V1_COMMIT" \
+    --v2-python "$COMPARE_ROOT/env-v2/bin/python" \
+    --v2-artifact "$V2_WHEEL" \
+    --v2-source "$PWD" \
+    --v2-commit "$V2_COMMIT" \
+    --sessions 5 \
+    --output "$COMPARE_ROOT/results.json"
+```
+
+The driver runs each boundary in both environments back-to-back and reverses or rotates the case
+order across sessions. `run_preloaded` times only `BacktestEngine.run()` after fixture creation,
+engine construction, and data registration. `load_build_run` includes instrument and data fixture
+creation, engine construction, data registration, and `run()`. The coordinator proves that each
+loaded extension byte-matches the corresponding wheel member before the run and rechecks the full
+identities after it. After every timed sample, its worker repeats the complete wheel, extension,
+source, and runtime identity proof and checks its canonical digest against the coordinator's
+initial identity. Raw output stores each full identity once and binds every sample to it by digest.
+Source identity hashes staged diffs, unstaged diffs, and untracked file contents in addition to the
+revision. Exact event, order, position, and account fingerprints are checked after every timed
+iteration without adding fingerprint work to the duration.
+
+Repeat `--scenario <name>` or `--boundary <name>` on the `compare` command to run a targeted subset.
+Omit both options to run the complete matrix. Raw output stores one full fingerprint for each
+selected scenario and boundary, then binds every timed sample to it by digest.
+
+The JSON output contains every elapsed sample, the observed host state, boundary definitions,
+medians, minimum-to-maximum spread, v2/v1 ratios, and percentage gaps. The driver requires at least
+three full sessions. It records CPU governor and `perf_event_paranoid` values but does not change
+host controls.
 
 ## Known limitations
 

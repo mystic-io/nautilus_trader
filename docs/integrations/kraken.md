@@ -53,6 +53,14 @@ The adapter supports these product categories:
 | Spot tokenized assets | ✓         | Loaded from Kraken's `tokenized_asset` asset class. |
 | Futures               | ✓         | Instruments returned by the Kraken Futures API.     |
 
+:::warning
+Kraken Futures can return instrument definitions that need more than standard-precision mode's nine decimal places.
+Keep [high-precision mode](../getting_started/installation.md#precision-mode) enabled for Futures. Standard-precision
+mode continues to support Spot, but Futures clients fail to start or return instruments when any definition cannot
+be parsed. Futures catalogue requests return no partial result and never round, clamp, or omit an unsupported
+definition.
+:::
+
 :::note
 **Single product type per client**: Each Kraken data or execution client is
 configured for a single `product_type` (`SPOT` or `FUTURES`); a single client
@@ -436,6 +444,15 @@ the exchange state at startup or during operation.
 - Trade history: Fetches execution history with pagination.
 - Time-bounded queries: Supports filtering by start/end timestamps.
 - All fill types: Market, limit, and conditional order fills.
+
+**Account balances:**
+
+- Wallet balances: Fetched from `POST /0/private/BalanceEx`, which reports both the
+  total and the held (`hold_trade`) amount per asset. The held amount populates
+  `AccountBalance.locked`, so `free` excludes funds Kraken has reserved against
+  resting orders. For accounts with a credit line, net credit (`credit - credit_used`)
+  is included in `AccountBalance.total`, so `free` matches Kraken's available balance
+  of `balance + credit - credit_used - hold_trade`.
 
 **Margin position reports** (when `spot_account_type=Margin`):
 
